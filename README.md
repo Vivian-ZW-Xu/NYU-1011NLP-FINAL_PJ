@@ -2,66 +2,160 @@
 
 ## Project Overview
 
-This project implements a Generator–Verifier framework for GSM8K-style mathematical reasoning. The main objective is to analyze how a fine-tuned Generator behaves under multi-sample inference and to determine whether a separately trained Verifier can improve answer reliability. The project also evaluates how different verification strategies perform under varying levels of generator stability (high-consensus, polarized, and low-consensus problems).
+This project implements a modular Generator–Verifier (G+V) framework for GSM8K-style mathematical reasoning. The core goal is to (1) generate multiple reasoning samples per problem, (2) evaluate generator stability via consensus analysis, and (3) determine whether a separately trained Verifier can improve final answer reliability. The workflow is fully modular: each stage—data generation, model training, test sampling, consensus grouping, and final evaluation—can be executed independently.
 
-The pipeline includes:
-1. A fine-tuned Generator model (Phi-2 with LoRA)
-2. A RoBERTa-based Verifier for outcome-level correctness classification
-3. Scripts for generating training data, producing 15-sample test outputs, and running full Generator–Verifier evaluation
+The system consists of:
+1. A LoRA-fine-tuned Phi-2 Generator
+2. A RoBERTa-large Verifier trained for outcome-level correctness classification
+3. Scripts for data preparation, 15-sample test generation, consensus-grouping, and final evaluation across high/medium/low consensus categories
 
-The repository is structured so that each stage of the workflow is modular and can be executed independently.
+---
 
 ## File Descriptions
 
-generator_train.py:
-Trains the Generator model using the GSM8K training set with LoRA fine-tuning. The resulting checkpoint is saved in the generator_checkpoint/ directory and is used by all subsequent inference scripts.
+### generator_train.py  
+Trains the Generator model on the GSM8K training set using LoRA.  
+The resulting checkpoint is saved in the `generator_checkpoint/` directory and is used by all inference scripts.
 
-generator_eval.py:
-Evaluates the trained Generator model. It computes greedy decoding accuracy and can optionally evaluate sampling-based decoding. This serves as a baseline before integrating the Verifier.
+### generator_eval.py  
+Evaluates the trained Generator.  
+Provides greedy-decoding accuracy and optional sampling-based metrics.  
+This script serves as a baseline before integrating the Verifier.
 
-generate_verifier_data.py:
-Generates the training and evaluation datasets for the Verifier. It uses the trained Generator to produce multiple solutions per question (k = 1, 3, 5, 7), extracts predicted answers, labels correctness using exact match, and saves all datasets in the verifier_data/ directory. The files train_k5.json and eval_k5.json are used to train the final Verifier.
+### generate_verifier_data.py  
+Generates all datasets used to train the Verifier.  
+For each question, the trained Generator produces multiple solutions (k = 1, 3, 5, 7).  
+Each solution is parsed into:
+- a reasoning chain  
+- a predicted answer  
+- a weak-supervision correctness label (`is_correct`)  
 
-train_verifier_RoBERTa.py:
-Trains a RoBERTa-based Verifier model on the datasets in verifier_data/. The model performs binary classification on reasoning chains, predicting whether each solution is correct. The trained Verifier checkpoint and configuration are stored in verifier_RoBERTa/.
+All datasets are stored in the `verifier_data/` directory.  
+The files `train_k5.json` and `eval_k5.json` are used for final Verifier training.
 
-generate_test_solutions.py:
-Generates 15 solutions for every problem in the GSM8K test set using the trained Generator. Each solution includes a reasoning paragraph and a predicted answer. All results are saved into test_k15.json. This file is the foundation for consensus analysis and all Generator–Verifier evaluation experiments.
+### verifier_train_RoBERTa.py  
+(Previously named `train_verifier_RoBERTa.py`)  
+Trains a RoBERTa-large model as an outcome-level Verifier.  
+The model performs binary classification, predicting whether a generated solution is correct.  
+The fully trained checkpoint and tokenizer are saved in the `verifier_RoBERTa/` directory.
 
-evaluate_gv_iterative_v2.py:
-Runs the final evaluation comparing three methods: generator-only majority vote, generator + verifier with top-score selection, and generator + verifier with weighted majority vote. It loads the 15-solution dataset from test_k15.json, applies each evaluation strategy, and outputs accuracy results across different consensus groups.
+### generate_test_solutions.py  
+Legacy script for generating test-set solutions (non-batched, smaller k).  
+Kept for compatibility but no longer used in the final pipeline.
 
-generator_checkpoint/:
-The directory containing the trained Generator model produced by generator_train.py. All inference and data-generation scripts depend on this checkpoint.
+### generate_test_k15.py  
+**New, primary script for test-time data generation.**  
+Generates 15 solutions per GSM8K test problem (three rounds × five samples).  
+The output file `test_k15.json` is the main dataset used for:
+- consensus analysis  
+- all Generator-only baselines  
+- all Generator–Verifier evaluations  
 
-verifier_data/:
-A directory containing automatically generated datasets for Verifier training. These files are produced by generate_verifier_data.py and include versions for several values of k.
+### classify_by_margin.py  
+Classifies each test-set problem into a consensus group using the 15 generated solutions.  
+The margin is defined from the solution distribution (e.g., top-frequency minus second-highest frequency).  
+Outputs:
 
-verifier_RoBERTa/:
-The directory containing the trained RoBERTa Verifier produced by train_verifier_RoBERTa.py.
+- `group_high.json`  
+- `group_medium.json`  
+- `group_low.json`  
+- `classify_metadata.json` (stores thresholds and statistics)
+
+### evaluate_groups.py  
+(Previously named `evaluate_gv_iterative_v2.py`)  
+Runs the complete set of evaluation experiments using the grouped data.  
+This includes:
+
+- generator-only majority vote  
+- pass@k statistics  
+- Verifier-guided filtering  
+- Verifier-weighted aggregation  
+- comparisons across high/medium/low consensus groups  
+
+Loads:
+- the grouped files (`group_*.json`)  
+- the Verifier (`verifier_RoBERTa/`)  
+- the 15-solution dataset (`test_k15.json`)  
+
+Outputs final metrics to:
+
+- `eval_results.json`
+
+### generator_checkpoint/  
+Directory containing the LoRA-fine-tuned Generator model produced by `generator_train.py`.  
+Used by all sampling and data-generation scripts.
+
+### verifier_data/  
+Contains all automatically generated datasets for Verifier training.  
+Produced by `generate_verifier_data.py`.  
+Includes multiple k-versions (k = 1, 3, 5, 7) for both train and eval splits.
+
+### verifier_RoBERTa/  
+Directory containing the fully trained RoBERTa Verifier.  
+Produced by `verifier_train_RoBERTa.py`.
+
+### test_k15.json  
+The main test-set sampling file:  
+1319 GSM8K problems × 15 solutions = 19,785 total samples.  
+Required by all consensus and G+V evaluations.
+
+### group_high.json / group_medium.json / group_low.json  
+Consensus-based partitions of the test set, produced by `classify_by_margin.py`.
+
+### classify_metadata.json  
+Stores consensus thresholds and preprocessing statistics.
+
+---
 
 ## Execution Workflow
 
-The recommended order for running the entire project is:
+The recommended pipeline is:
 
-1. Train the Generator:
+1. **Train the Generator**  
+   ```
    python generator_train.py
+   ```
 
-2. (Optional) Evaluate the Generator baseline:
+2. **(Optional) Evaluate the Generator**  
+   ```
    python generator_eval.py
+   ```
 
-3. Generate Verifier training data:
+3. **Generate Verifier training data**  
+   ```
    python generate_verifier_data.py
+   ```
 
-4. Train the Verifier:
-   python train_verifier_RoBERTa.py
+4. **Train the Verifier**  
+   ```
+   python verifier_train_RoBERTa.py
+   ```
 
-5. Generate 15 solutions per test-set question:
-   python generate_test_solutions.py
+5. **Generate 15 solutions per test-set problem**  
+   ```
+   python generate_test_k15.py
+   ```
 
-6. Run the full Generator–Verifier evaluation:
-   python evaluate_gv_iterative_v2.py
+6. **Classify test problems into consensus groups**  
+   ```
+   python classify_by_margin.py
+   ```
 
-The outputs of these scripts include the generator checkpoint, the verifier checkpoint, multi-sample test solutions, and the final accuracy results for all evaluation methods.
+7. **Run all Generator–Verifier evaluations**  
+   ```
+   python evaluate_groups.py
+   ```
 
-This completes the documentation for the repository.
+These steps produce:
+- the trained Generator checkpoint  
+- the trained Verifier checkpoint  
+- the 15-sample test dataset  
+- consensus partitions  
+- the final `eval_results.json` summarizing all performance metrics  
+
+---
+
+## Summary
+
+This repository provides a complete, modular pipeline for studying Generator stability and Verifier effectiveness in long-form mathematical reasoning tasks. It isolates each component—generation, verification, consensus modeling, and evaluation—making it easy to analyze failure cases and the limits of binary-classification verification on reasoning chains.
+

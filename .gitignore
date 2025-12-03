@@ -1,21 +1,18 @@
-# macOS
+# =============================================
+# OS / editor cache
+# =============================================
 .DS_Store
+__pycache__/
+.ipynb_checkpoints/
 
-# model checkpoints
+# =============================================
+# Model checkpoints (DO NOT upload to GitHub)
+# =============================================
 generator_checkpoint/
 verifier_RoBERTa/
 
-# data files
+# =============================================
+# Large data generated during training or inference
+# =============================================
 verifier_data/
 test_k15.json
-
-# python cache
-__pycache__/
-*.pyc
-
-# wandb
-wandb/
-
-# large artifacts
-*.bin
-*.safetensors

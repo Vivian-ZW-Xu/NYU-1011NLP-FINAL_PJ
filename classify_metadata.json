@@ -1,0 +1,18 @@
+{
+  "method": "margin (r1-r2) with percentile thresholds",
+  "input": "./test_k15.json",
+  "total_questions": 1319,
+  "tau_low": 0.13333333333333336,
+  "tau_high": 0.5333333333333333,
+  "margin_stats": {
+    "min": 0.0,
+    "max": 1.0,
+    "mean": 0.39752337629517304,
+    "median": 0.33333333333333337
+  },
+  "group_sizes": {
+    "high": 505,
+    "medium": 397,
+    "low": 417
+  }
+}

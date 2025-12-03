@@ -10,6 +10,7 @@ __pycache__/
 # =============================================
 generator_checkpoint/
 verifier_RoBERTa/
+ranker_roberta/
 
 # =============================================
 # Large data generated during training or inference

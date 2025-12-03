@@ -207,11 +207,11 @@ Results from 7 methods evaluated across the three consensus groups:
 
 | Method | Overall | High | Medium | Low |
 |-------|---------|-------|---------|------|
-| (i) Majority Vote | **68.61%** | **96.04%** | 72.04% | 32.13% |
+| (i) Majority Vote | **68.61%** | **96.04%** | **72.04%** | 32.13% |
 | (ii) G+Classifier Top | 41.17% | 65.15% | 35.77% | 17.27% |
 | (iii) G+Classifier Weighted | 64.90% | 95.05% | 64.99% | 28.30% |
 | (iv) G+Ranker Top | 36.54% | 59.41% | 30.73% | 14.39% |
-| (v) G+Ranker Weighted | **68.16%** | 95.84% | **70.53%** | **32.37%** |
+| (v) G+Ranker Weighted | **68.16%** | 95.84% | 70.53% | **32.37%** |
 | (vi) G+C+R Top | 38.06% | 60.79% | 33.00% | 15.35% |
 | (vii) G+C+R Weighted | 61.64% | 93.07% | 60.96% | 24.22% |
 

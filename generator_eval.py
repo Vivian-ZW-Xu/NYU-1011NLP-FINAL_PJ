@@ -26,7 +26,7 @@ SEED = 42
 # Helper Functions
 # ============================================================================
 def format_gsm8k_example(example):
-    """Format GSM8K example for evaluation."""
+
     question = example["question"].strip()
     answer = example["answer"].strip()
 
@@ -59,7 +59,7 @@ def validate_example(example):
 
 
 def generate_solution(model, tokenizer, question, max_new_tokens=512):
-    """Generate solution with greedy decoding."""
+
     prompt = f"Question: {question}\n\nLet's solve this step by step.\n"
     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
 
@@ -78,7 +78,7 @@ def generate_solution(model, tokenizer, question, max_new_tokens=512):
 
 
 def extract_answer(solution_text):
-    """Extract numeric answer from solution."""
+
     match = re.search(r'Final answer:\s*([^\n]+)', solution_text, re.IGNORECASE)
     if not match:
         return None
@@ -100,7 +100,6 @@ def main():
     print("Generator Evaluation (Pass@1)")
     print("=" * 60)
 
-    # Load model
     print(f"\nLoading model from {ADAPTER_PATH}...")
     base_model = AutoModelForCausalLM.from_pretrained(
         BASE_MODEL,
@@ -114,7 +113,6 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(ADAPTER_PATH, trust_remote_code=True)
     print("Model loaded!")
 
-    # Load data
     print("\nLoading GSM8K dataset...")
     dataset = load_dataset("gsm8k", "main")
     train_val = dataset["train"].train_test_split(test_size=0.1, seed=SEED)
@@ -124,7 +122,6 @@ def main():
     val_formatted = val_formatted.filter(validate_example)
     print(f"Validation examples: {len(val_formatted)}")
 
-    # Evaluate
     print("\nEvaluating...")
     correct = 0
     total = 0
@@ -152,7 +149,6 @@ def main():
             correct += 1
         total += 1
 
-        # Show first 3 examples
         if i < 3:
             print(f"\n{'─' * 50}")
             print(f"Example {i+1}: {'✅' if is_correct else '❌'}")
@@ -160,7 +156,6 @@ def main():
             print(f"Ground Truth: {ground_truth}")
             print(f"Predicted: {predicted}")
 
-    # Results
     accuracy = correct / total if total > 0 else 0
     format_rate = (total / len(val_formatted)) * 100
 
@@ -173,7 +168,6 @@ def main():
     print(f"Invalid Format: {invalid_format}")
     print("=" * 60)
 
-    # Save results
     results = {
         "accuracy": accuracy,
         "correct": correct,

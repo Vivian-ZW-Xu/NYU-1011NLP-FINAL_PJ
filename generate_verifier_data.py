@@ -33,13 +33,11 @@ TOP_P = 0.95
 TOP_K = 50
 BATCH_SIZE = 4  # Number of solutions to generate in parallel
 
-# Data splits
 TRAIN_START = 0
 TRAIN_END = 2000
 EVAL_START = 2000
 EVAL_END = 2500
 
-# Paths
 MODEL_PATH = "./generator_ovm"
 BASE_MODEL = "microsoft/phi-2"
 OUTPUT_DIR = "./verifier_data"
@@ -71,7 +69,6 @@ def generate_solutions_batch(model, tokenizer, question, num_solutions, use_samp
     """Generate multiple solutions for a question using batching."""
     prompt = format_prompt(question)
 
-    # Create batch of identical prompts
     inputs = tokenizer(
         [prompt] * num_solutions,
         return_tensors="pt",
@@ -97,7 +94,6 @@ def generate_solutions_batch(model, tokenizer, question, num_solutions, use_samp
                 pad_token_id=tokenizer.eos_token_id,
             )
 
-    # Decode all outputs
     solutions = []
     for i in range(num_solutions):
         generated = tokenizer.decode(outputs[i], skip_special_tokens=True)
@@ -113,10 +109,8 @@ def generate_k_solutions(model, tokenizer, question, k):
     k>1: sampling with batching
     """
     if k == 1:
-        # Greedy decoding for k=1
         return generate_solutions_batch(model, tokenizer, question, 1, use_sampling=False)
 
-    # For k>1, generate in batches
     solutions = []
     remaining = k
 
@@ -131,7 +125,7 @@ def generate_k_solutions(model, tokenizer, question, k):
     return solutions
 
 def extract_answer(text):
-    """Extract numerical answer from solution text."""
+    
     patterns = [
         r'[Ff]inal [Aa]nswer[:\s]*([-\d\.,]+)',
         r'[Aa]nswer[:\s]*([-\d\.,]+)',
@@ -149,7 +143,7 @@ def extract_answer(text):
     return None
 
 def extract_gt(answer):
-    """Extract ground truth from GSM8K answer format."""
+
     m = re.search(r'####\s*([-\d\.,]+)', answer)
     if m:
         try:
@@ -159,13 +153,13 @@ def extract_gt(answer):
     return None
 
 def is_correct(pred, gt, tol=1e-4):
-    """Check if prediction matches ground truth within tolerance."""
+
     if pred is None or gt is None:
         return False
     return abs(pred - gt) < tol
 
 def process_questions(model, tokenizer, questions, split_name, k=7):
-    """Process a set of questions and generate k solutions for each."""
+
     results = []
 
     log(f"Processing {len(questions)} {split_name} questions with k={k} (batch_size={BATCH_SIZE})...")
@@ -175,10 +169,8 @@ def process_questions(model, tokenizer, questions, split_name, k=7):
         answer = item["answer"]
         gt = extract_gt(answer)
 
-        # Generate k solutions using batching
         solutions = generate_k_solutions(model, tokenizer, question, k)
 
-        # Extract predictions and check correctness for each solution
         solution_data = []
         for sol in solutions:
             pred = extract_answer(sol)
@@ -196,7 +188,6 @@ def process_questions(model, tokenizer, questions, split_name, k=7):
             "solutions": solution_data
         })
 
-        # Progress logging every 100 questions
         if (i + 1) % 100 == 0:
             correct_count = sum(1 for r in results if any(s["is_correct"] for s in r["solutions"]))
             log(f"Progress: {i+1}/{len(questions)}, Pass@{k}: {correct_count}/{i+1} = {correct_count/(i+1)*100:.1f}%")
@@ -204,7 +195,7 @@ def process_questions(model, tokenizer, questions, split_name, k=7):
     return results
 
 def extract_k_subset(results, k):
-    """Extract k-solution subset from results with more solutions."""
+    
     subset = []
     for item in results:
         new_item = {
@@ -217,7 +208,7 @@ def extract_k_subset(results, k):
     return subset
 
 def compute_statistics(results, k_values=[1, 3, 5, 7]):
-    """Compute Pass@k statistics for results."""
+
     stats = {}
     for k in k_values:
         if k > len(results[0]["solutions"]):
@@ -225,7 +216,6 @@ def compute_statistics(results, k_values=[1, 3, 5, 7]):
 
         pass_count = 0
         for item in results:
-            # Check if any of first k solutions is correct
             if any(item["solutions"][i]["is_correct"] for i in range(min(k, len(item["solutions"])))):
                 pass_count += 1
 
@@ -234,7 +224,6 @@ def compute_statistics(results, k_values=[1, 3, 5, 7]):
     return stats
 
 def save_results(results, filepath):
-    """Save results to JSON file."""
     with open(filepath, 'w') as f:
         json.dump(results, f, indent=2)
     log(f"Saved results to {filepath}")
@@ -248,10 +237,8 @@ def main():
     log("=" * 60)
     log(f"Batch size: {BATCH_SIZE}")
 
-    # Create output directory
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    # Load model
     log("Loading base model...")
     base_model = AutoModelForCausalLM.from_pretrained(
         BASE_MODEL,
@@ -267,19 +254,16 @@ def main():
     log("Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, trust_remote_code=True)
 
-    # Set padding token (required for batching)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
         tokenizer.pad_token_id = tokenizer.eos_token_id
 
     log(f"Model loaded on device: {model.device}")
 
-    # Load dataset
     log("Loading GSM8K dataset...")
     dataset = load_dataset("gsm8k", "main")
     train_full = dataset["train"]
 
-    # Split data
     train_questions = train_full.select(range(TRAIN_START, TRAIN_END))
     eval_questions = train_full.select(range(EVAL_START, EVAL_END))
 
@@ -295,15 +279,12 @@ def main():
 
     train_results_k7 = process_questions(model, tokenizer, train_questions, "train", k=7)
 
-    # Save k=7 results
     save_results(train_results_k7, os.path.join(OUTPUT_DIR, "train_k7.json"))
 
-    # Extract and save subsets
     for k in [1, 3, 5]:
         subset = extract_k_subset(train_results_k7, k)
         save_results(subset, os.path.join(OUTPUT_DIR, f"train_k{k}.json"))
 
-    # Compute and log training statistics
     train_stats = compute_statistics(train_results_k7)
     log(f"Training statistics: {train_stats}")
 
@@ -316,15 +297,12 @@ def main():
 
     eval_results_k7 = process_questions(model, tokenizer, eval_questions, "eval", k=7)
 
-    # Save k=7 results
     save_results(eval_results_k7, os.path.join(OUTPUT_DIR, "eval_k7.json"))
 
-    # Extract and save subsets
     for k in [1, 3, 5]:
         subset = extract_k_subset(eval_results_k7, k)
         save_results(subset, os.path.join(OUTPUT_DIR, f"eval_k{k}.json"))
 
-    # Compute and log evaluation statistics
     eval_stats = compute_statistics(eval_results_k7)
     log(f"Evaluation statistics: {eval_stats}")
 

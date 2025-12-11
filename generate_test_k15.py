@@ -2,9 +2,6 @@
 """
 Generate K=15 solutions for GSM8K TEST set (Batch Version)
 ===========================================================
-用于后续所有 baseline 和 iterative G+V 实验的统一数据。
-
-优化：使用 batch generation 加速 3-4 倍
 """
 
 import torch
@@ -24,8 +21,8 @@ BASE_MODEL = "microsoft/phi-2"
 ADAPTER_PATH = "./generator_ovm"
 OUTPUT_PATH = "./test_k15.json"
 
-K = 15  # 每题生成 15 个 solutions
-BATCH_SIZE = 1  # 每次只处理1题，生成15个序列，12GB显存够用
+K = 15
+BATCH_SIZE = 1
 MAX_NEW_TOKENS = 256
 TEMPERATURE = 0.7
 TOP_P = 0.9
@@ -83,19 +80,9 @@ def extract_ground_truth(answer_text):
 # Batch Generation
 # ============================================================================
 def generate_batch(model, tokenizer, questions, k, device):
-    """
-    Batch generation: 同时处理多个问题，每个生成 k 个答案
 
-    Args:
-        questions: list of questions
-        k: number of solutions per question
-
-    Returns:
-        list of list: [[sol1, sol2, ...], [sol1, sol2, ...], ...]
-    """
     prompts = [format_prompt(q) for q in questions]
 
-    # Tokenize with padding
     inputs = tokenizer(
         prompts,
         return_tensors="pt",
@@ -104,14 +91,11 @@ def generate_batch(model, tokenizer, questions, k, device):
         max_length=512,
     ).to(device)
 
-    # 记录输入的 token 长度（用于后续截取生成部分）
-    # 这比用字符串长度更可靠
     input_length = inputs["input_ids"].shape[1]
 
     batch_size = len(questions)
     all_solutions = [[] for _ in range(batch_size)]
 
-    # 分批生成，每次5个序列，避免OOM
     seqs_per_call = 5
     num_calls = (k + seqs_per_call - 1) // seqs_per_call
 
@@ -130,12 +114,9 @@ def generate_batch(model, tokenizer, questions, k, device):
                 eos_token_id=tokenizer.eos_token_id,
             )
 
-        # outputs shape: (batch_size * current_k, seq_len)
-        # HuggingFace generate() 输出顺序: 每个input的sequences连续排列
-        # 即 [input0_seq0, input0_seq1, ..., input1_seq0, input1_seq1, ...]
         for i in range(batch_size):
             for j in range(current_k):
-                output_idx = i * current_k + j  # 正确索引
+                output_idx = i * current_k + j
                 generated_tokens = outputs[output_idx][input_length:]
                 solution = tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
                 all_solutions[i].append(solution)
@@ -144,9 +125,7 @@ def generate_batch(model, tokenizer, questions, k, device):
 
 
 def generate_single(model, tokenizer, question, k, device):
-    """
-    单个问题生成 k 个答案（fallback，用于 batch 处理不了的情况）
-    """
+
     prompt = format_prompt(question)
     inputs = tokenizer(prompt, return_tensors="pt").to(device)
     input_length = inputs["input_ids"].shape[1]
@@ -189,7 +168,6 @@ def main():
     log(f"Solutions per question: {K}")
     log(f"Design: 15 solutions = 3 rounds x 5 per round")
 
-    # Setup device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     log(f"Device: {device}")
     if torch.cuda.is_available():
@@ -197,7 +175,6 @@ def main():
         gpu_mem = torch.cuda.get_device_properties(0).total_memory / 1e9
         log(f"GPU Memory: {gpu_mem:.1f} GB")
 
-        # 根据显存调整 batch size
         if gpu_mem < 12:
             BATCH_SIZE_ACTUAL = 2
         elif gpu_mem < 24:
@@ -208,7 +185,6 @@ def main():
     else:
         BATCH_SIZE_ACTUAL = 1
 
-    # Load model
     log(f"\nLoading base model: {BASE_MODEL}")
     base_model = AutoModelForCausalLM.from_pretrained(
         BASE_MODEL,
@@ -224,17 +200,15 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(ADAPTER_PATH)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-    tokenizer.padding_side = "left"  # 对于 decoder-only 模型，左 padding
+    tokenizer.padding_side = "left"
 
     log("Model loaded!")
 
-    # Load GSM8K test set
     log("\nLoading GSM8K test set...")
     dataset = load_dataset("gsm8k", "main")
     test_set = dataset["test"]
     log(f"Test set size: {len(test_set)} questions")
 
-    # Check for existing checkpoint
     results = []
     start_idx = 0
     if os.path.exists(OUTPUT_PATH):
@@ -249,14 +223,12 @@ def main():
             results = []
             start_idx = 0
 
-    # Prepare data
     remaining_items = list(test_set)[start_idx:]
     log(f"\nGenerating solutions...")
     log(f"Total questions: {len(test_set)}")
     log(f"Starting from: {start_idx}")
     log(f"Remaining: {len(remaining_items)}")
 
-    # Process in batches
     num_batches = (len(remaining_items) + BATCH_SIZE_ACTUAL - 1) // BATCH_SIZE_ACTUAL
 
     pbar = tqdm(total=len(remaining_items), initial=0, desc="Generating")
@@ -269,11 +241,9 @@ def main():
         questions = [item["question"] for item in batch_items]
 
         try:
-            # Batch generation
             if len(questions) > 1:
                 all_solutions = generate_batch(model, tokenizer, questions, K, device)
             else:
-                # 单个问题用单独处理
                 all_solutions = [generate_single(model, tokenizer, questions[0], K, device)]
         except RuntimeError as e:
             if "out of memory" in str(e).lower():
@@ -286,7 +256,6 @@ def main():
             else:
                 raise e
 
-        # Process results
         for i, item in enumerate(batch_items):
             global_idx = start_idx + batch_start + i
             solutions = all_solutions[i]
@@ -312,19 +281,17 @@ def main():
 
         pbar.update(len(batch_items))
 
-        # Save checkpoint
         if (batch_idx + 1) % 10 == 0 or batch_idx == num_batches - 1:
             with open(OUTPUT_PATH, "w") as f:
                 json.dump(results, f, indent=2)
 
     pbar.close()
 
-    # Final save
+
     log(f"\nSaving final results to {OUTPUT_PATH}...")
     with open(OUTPUT_PATH, "w") as f:
         json.dump(results, f, indent=2)
 
-    # Statistics
     log("\n" + "=" * 60)
     log("GENERATION COMPLETE")
     log("=" * 60)
@@ -335,7 +302,6 @@ def main():
         for item in results
     )
 
-    # Pass@k statistics
     for k_val in [1, 5, 10, 15]:
         questions_with_correct = sum(
             1 for item in results

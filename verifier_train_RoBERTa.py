@@ -43,7 +43,6 @@ DATA_DIR = "./verifier_data"
 OUTPUT_DIR = "./verifier_deberta"
 MAX_LENGTH = 512  # RoBERTa handles this well
 
-# Training hyperparameters
 LEARNING_RATE = 2e-5  # Lower LR for full finetune (no LoRA)
 BATCH_SIZE = 8        # Can be larger since model is smaller
 GRADIENT_ACCUMULATION = 4  # Effective batch size = 32
@@ -69,7 +68,7 @@ def log(msg):
     print(f"[{timestamp}] {msg}", flush=True)
 
 def load_data(filepath):
-    """Load generated data and convert to training format."""
+
     with open(filepath, 'r') as f:
         data = json.load(f)
 
@@ -80,8 +79,6 @@ def load_data(filepath):
             solution = sol_data["solution"]
             label = 1 if sol_data["is_correct"] else 0
 
-            # Format: Question + Solution
-            # RoBERTa works well with </s> token between segments (but [SEP] also works)
             text = f"Question: {question} [SEP] Solution: {solution}"
             examples.append({
                 "text": text,
@@ -92,7 +89,7 @@ def load_data(filepath):
     return examples
 
 def balance_dataset(examples):
-    """Balance positive and negative examples."""
+
     pos_examples = [ex for ex in examples if ex["label"] == 1]
     neg_examples = [ex for ex in examples if ex["label"] == 0]
 
@@ -107,7 +104,7 @@ def balance_dataset(examples):
     return balanced
 
 def compute_metrics(eval_pred):
-    """Compute metrics for evaluation."""
+
     logits, labels = eval_pred
     predictions = np.argmax(logits, axis=1)
     probs = torch.softmax(torch.tensor(logits), dim=1)[:, 1].numpy()
@@ -131,10 +128,7 @@ def compute_metrics(eval_pred):
     }
 
 def compute_pairwise_accuracy(model, tokenizer, eval_data, device, batch_size=32):
-    """
-    Compute pairwise accuracy: for each question, check if correct solutions
-    are scored higher than incorrect solutions.
-    """
+
     model.eval()
 
     from collections import defaultdict
@@ -199,7 +193,6 @@ def main():
     log("RoBERTa Verifier Training (OVM)")
     log("=" * 60)
 
-    # Check GPU
     log(f"PyTorch version: {torch.__version__}")
     log(f"CUDA available: {torch.cuda.is_available()}")
     if torch.cuda.is_available():
@@ -225,7 +218,6 @@ def main():
     bal_neg = len(train_examples) - bal_pos
     log(f"After balancing: {len(train_examples)} examples (pos: {bal_pos}, neg: {bal_neg})")
 
-    # Split train/val
     random.shuffle(train_examples)
     val_size = int(len(train_examples) * TRAIN_VAL_SPLIT)
     val_examples = train_examples[:val_size]
@@ -233,11 +225,9 @@ def main():
 
     log(f"Training: {len(train_examples)}, Validation: {len(val_examples)}")
 
-    # Load eval data
     eval_examples_final = load_data(os.path.join(DATA_DIR, "eval_k5.json"))
     log(f"Final evaluation set: {len(eval_examples_final)} examples")
 
-    # Create datasets
     train_dataset = Dataset.from_list(train_examples)
     val_dataset = Dataset.from_list(val_examples)
 
@@ -256,7 +246,6 @@ def main():
 
     model = model.to(device)
 
-    # Count parameters
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     log(f"Total params: {total_params:,}")
@@ -293,19 +282,16 @@ def main():
     training_args = TrainingArguments(
         output_dir=OUTPUT_DIR,
 
-        # Training
         num_train_epochs=NUM_EPOCHS,
         per_device_train_batch_size=BATCH_SIZE,
         per_device_eval_batch_size=BATCH_SIZE * 2,  # Can be larger for eval
         gradient_accumulation_steps=GRADIENT_ACCUMULATION,
 
-        # Optimizer
         learning_rate=LEARNING_RATE,
         weight_decay=WEIGHT_DECAY,
         warmup_ratio=WARMUP_RATIO,
         lr_scheduler_type="cosine",
 
-        # Evaluation
         eval_strategy="steps",
         eval_steps=100,
         save_strategy="steps",
@@ -314,17 +300,14 @@ def main():
         metric_for_best_model="auc",
         greater_is_better=True,
 
-        # Performance
         fp16=True,
         dataloader_num_workers=4,
 
-        # Logging
         logging_steps=25,
         report_to="none",
         save_total_limit=2,
     )
 
-    # Create trainer with early stopping
     trainer = Trainer(
         model=model,
         args=training_args,

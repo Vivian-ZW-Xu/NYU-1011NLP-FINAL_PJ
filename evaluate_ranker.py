@@ -26,13 +26,12 @@ import numpy as np
 # ============================================================================
 # Configuration
 # ============================================================================
-# Load from pre-split group files
 GROUP_HIGH = "./group_high.json"
 GROUP_MEDIUM = "./group_medium.json"
 GROUP_LOW = "./group_low.json"
 
-CLASSIFIER_PATH = "./verifier_RoBERTa"  # existing classifier
-RANKER_PATH = "./ranker_roberta"        # new ranker
+CLASSIFIER_PATH = "./verifier_RoBERTa"
+RANKER_PATH = "./ranker_roberta"
 
 OUTPUT_PATH = "./ranker_eval_results.json"
 
@@ -67,7 +66,6 @@ class RoBERTaRanker(nn.Module):
         self.encoder = AutoModel.from_pretrained(model_name)
         hidden_size = self.encoder.config.hidden_size
 
-        # Score head: hidden -> 1
         self.score_head = nn.Sequential(
             nn.Dropout(0.1),
             nn.Linear(hidden_size, hidden_size // 2),
@@ -77,17 +75,14 @@ class RoBERTaRanker(nn.Module):
         )
 
     def forward(self, input_ids, attention_mask):
-        # Get encoder outputs
         outputs = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
         hidden_states = outputs.last_hidden_state  # (batch, seq_len, hidden)
 
-        # Mean pooling (excluding padding)
         mask_expanded = attention_mask.unsqueeze(-1).float()
         sum_hidden = (hidden_states * mask_expanded).sum(dim=1)
         sum_mask = mask_expanded.sum(dim=1).clamp(min=1e-9)
         pooled = sum_hidden / sum_mask  # (batch, hidden)
 
-        # Score
         score = self.score_head(pooled).squeeze(-1)  # (batch,)
         return score
 
@@ -145,12 +140,9 @@ class Ranker:
         log(f"Loading Ranker from {self.path}...")
         self.tokenizer = AutoTokenizer.from_pretrained(self.path)
 
-        # Load model architecture
         self.model = RoBERTaRanker("roberta-large")
 
-        # Load trained weights
         checkpoint = torch.load(os.path.join(self.path, "ranker_model.pt"), map_location=self.device)
-        # Handle both dict format and raw state_dict
         if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
             self.model.load_state_dict(checkpoint['model_state_dict'])
         else:
@@ -203,7 +195,6 @@ def method_top_score(solutions, ground_truth, threshold=0.5):
     Method (ii)/(iv): Top-Score Selection
     Returns: predicted_answer, is_correct
     """
-    # Find candidates above threshold
     candidates = [
         s for s in solutions
         if s.get("score", 0) > threshold
@@ -211,7 +202,6 @@ def method_top_score(solutions, ground_truth, threshold=0.5):
     ]
 
     if not candidates:
-        # Fallback: pick highest scored solution
         valid_solutions = [s for s in solutions if s.get("predicted_answer") is not None]
         if valid_solutions:
             best = max(valid_solutions, key=lambda x: x.get("score", 0))
@@ -227,7 +217,6 @@ def method_weighted_mv(solutions, ground_truth, threshold=0.5):
     Method (iii)/(v): Weighted Majority Vote
     Returns: predicted_answer, is_correct
     """
-    # Find candidates above threshold
     candidates = [
         s for s in solutions
         if s.get("score", 0) > threshold
@@ -235,17 +224,15 @@ def method_weighted_mv(solutions, ground_truth, threshold=0.5):
     ]
 
     if not candidates:
-        # Fallback: use all valid solutions
         candidates = [s for s in solutions if s.get("predicted_answer") is not None]
 
     if not candidates:
         return None, False
 
-    # Weighted voting
     answer_weights = {}
     for s in candidates:
         ans = s["predicted_answer"]
-        score = max(s.get("score", 0), 0.01)  # avoid zero weights
+        score = max(s.get("score", 0), 0.01)
         answer_weights[ans] = answer_weights.get(ans, 0) + score
 
     best_answer = max(answer_weights.keys(), key=lambda x: answer_weights[x])
@@ -262,21 +249,18 @@ def method_cls_rnk_top(solutions, ground_truth, cls_threshold=0.5):
 
     Returns: predicted_answer, is_correct
     """
-    # Step 1: Classifier filter
     candidates = [
         s for s in solutions
         if s.get("classifier_score", 0) > cls_threshold
         and s.get("predicted_answer") is not None
     ]
 
-    # Fallback: if no candidates pass threshold, use all valid solutions
     if not candidates:
         candidates = [s for s in solutions if s.get("predicted_answer") is not None]
 
     if not candidates:
         return None, False
 
-    # Step 2: Ranker picks top-1 from candidates
     best = max(candidates, key=lambda x: x.get("ranker_score", 0))
     return best.get("predicted_answer"), best.get("predicted_answer") == ground_truth
 
@@ -292,22 +276,18 @@ def method_cls_rnk_wmv(solutions, ground_truth, cls_threshold=0.5):
 
     Returns: predicted_answer, is_correct
     """
-    # Step 1: Classifier filter
     candidates = [
         s for s in solutions
         if s.get("classifier_score", 0) > cls_threshold
         and s.get("predicted_answer") is not None
     ]
 
-    # Fallback: if no candidates pass threshold, use all valid solutions
     if not candidates:
         candidates = [s for s in solutions if s.get("predicted_answer") is not None]
 
     if not candidates:
         return None, False
 
-    # Step 2 & 3: Weighted voting using ranker scores
-    # Normalize ranker scores to positive values for weighting
     min_rnk = min(s.get("ranker_score", 0) for s in candidates)
 
     answer_weights = {}
@@ -329,7 +309,6 @@ def main():
     log("Ranker vs Classifier Evaluation")
     log("=" * 70)
 
-    # Load test data from pre-split group files
     log("\nLoading test data from group files...")
     groups = {"high": [], "medium": [], "low": []}
 
@@ -340,21 +319,18 @@ def main():
     with open(GROUP_LOW, "r") as f:
         groups["low"] = json.load(f)
 
-    # Combine for overall stats
     test_data = groups["high"] + groups["medium"] + groups["low"]
 
     log(f"Loaded {len(test_data)} questions total:")
     for g, items in groups.items():
         log(f"  {g.capitalize()}: {len(items)} questions")
 
-    # Load models
     classifier = Classifier(CLASSIFIER_PATH)
     classifier.load()
 
     ranker = Ranker(RANKER_PATH)
     ranker.load()
 
-    # Score all solutions
     log("\n" + "=" * 70)
     log("Scoring all solutions...")
     log("=" * 70)
@@ -363,17 +339,14 @@ def main():
         question = item["question"]
         solutions = item["solutions"]
 
-        # Classifier scores
         classifier_scores = classifier.score_solutions(question, solutions)
         for sol, score in zip(solutions, classifier_scores):
             sol["classifier_score"] = score
 
-        # Ranker scores
         ranker_scores = ranker.score_solutions(question, solutions)
         for sol, score in zip(solutions, ranker_scores):
             sol["ranker_score"] = score
 
-    # Evaluate methods
     log("\nEvaluating methods...")
 
     results = {
@@ -387,35 +360,27 @@ def main():
             ground_truth = item["ground_truth"]
             solutions = item["solutions"]
 
-            # (i) Majority Vote
             pred_mv, correct_mv = method_majority_vote(solutions, ground_truth)
             results[group_name]["mv"].append(correct_mv)
 
-            # Set classifier scores for evaluation
             for s in solutions:
                 s["score"] = s["classifier_score"]
 
-            # (ii) Classifier Top Score
             pred_cls_top, correct_cls_top = method_top_score(solutions, ground_truth, CLASSIFIER_THRESHOLD)
             results[group_name]["cls_top"].append(correct_cls_top)
 
-            # (iii) Classifier Weighted MV
             pred_cls_wmv, correct_cls_wmv = method_weighted_mv(solutions, ground_truth, CLASSIFIER_THRESHOLD)
             results[group_name]["cls_wmv"].append(correct_cls_wmv)
 
-            # (iv) Ranker Top Score (use top-1, no threshold)
             best_by_ranker = max(solutions, key=lambda x: x["ranker_score"])
             correct_rnk_top = best_by_ranker.get("predicted_answer") == ground_truth
             results[group_name]["rnk_top"].append(correct_rnk_top)
 
-            # (v) Ranker Weighted MV (use raw ranker_score, shift to positive for weighting)
-            # Directly use ranker_score (not normalized) for weighted voting
             min_rnk = min(s["ranker_score"] for s in solutions)
             answer_weights_rnk = {}
             for s in solutions:
                 if s.get("predicted_answer") is not None:
                     ans = s["predicted_answer"]
-                    # Shift to positive: score - min + small offset
                     weight = s["ranker_score"] - min_rnk + 0.01
                     answer_weights_rnk[ans] = answer_weights_rnk.get(ans, 0) + weight
             if answer_weights_rnk:
@@ -425,15 +390,12 @@ def main():
                 correct_rnk_wmv = False
             results[group_name]["rnk_wmv"].append(correct_rnk_wmv)
 
-            # (vi) G + Classifier + Ranker Top (Classifier filter → Ranker select top-1)
             pred_cls_rnk_top, correct_cls_rnk_top = method_cls_rnk_top(solutions, ground_truth, CLASSIFIER_THRESHOLD)
             results[group_name]["cls_rnk_top"].append(correct_cls_rnk_top)
 
-            # (vii) G + Classifier + Ranker Weighted MV (Classifier filter → Ranker weighted vote)
             pred_cls_rnk_wmv, correct_cls_rnk_wmv = method_cls_rnk_wmv(solutions, ground_truth, CLASSIFIER_THRESHOLD)
             results[group_name]["cls_rnk_wmv"].append(correct_cls_rnk_wmv)
 
-    # Compute and print metrics
     log("\n" + "=" * 70)
     log("RESULTS")
     log("=" * 70)
@@ -448,13 +410,11 @@ def main():
         "cls_rnk_wmv": "G+C+R Weighted MV"
     }
 
-    # Compute overall results
     all_results = {method: [] for method in method_names.keys()}
     for group_name in ["high", "medium", "low"]:
         for method in method_names.keys():
             all_results[method].extend(results[group_name][method])
 
-    # Header
     log(f"\n{'Method':<25} | {'Overall':>10} | {'High':>10} | {'Medium':>10} | {'Low':>10}")
     log("-" * 75)
 
@@ -480,7 +440,6 @@ def main():
         overall_pass = sum(1 for item in test_data if any(s["is_correct"] for s in item["solutions"][:k]))
         log(f"  Pass@{k}: {100*overall_pass/total:.2f}%")
 
-    # Improvement analysis
     log("\n" + "=" * 70)
     log("IMPROVEMENT ANALYSIS")
     log("=" * 70)
@@ -507,7 +466,6 @@ def main():
     overall_cr = 100 * sum(all_results["cls_rnk_top"]) / len(all_results["cls_rnk_top"])
     log(f"  {'Overall':>8}: Cls={overall_cls:.2f}%, C+R={overall_cr:.2f}%, Diff={overall_cr - overall_cls:+.2f}%")
 
-    # Save results
     log(f"\nSaving results to {OUTPUT_PATH}...")
     output_data = {
         "config": {

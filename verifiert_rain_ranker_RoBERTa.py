@@ -35,15 +35,12 @@ import numpy as np
 # ============================================================================
 SEED = 42
 
-# Model - RoBERTa-large is stable and strong for this task
-# (DeBERTa has tokenizer bugs in recent transformers versions)
 BASE_MODEL = "roberta-large"  # ~355M params, stable encoder
 
 DATA_DIR = "./verifier_data"
 OUTPUT_DIR = "./ranker_roberta"
 MAX_LENGTH = 512
 
-# Training hyperparameters
 LEARNING_RATE = 2e-5
 BATCH_SIZE = 2  # pairs per batch (reduced for 12GB GPU)
 GRADIENT_ACCUMULATION = 16  # effective batch = 32 pairs
@@ -53,7 +50,6 @@ TRAIN_VAL_SPLIT = 0.1
 WEIGHT_DECAY = 0.01
 MARGIN = 0.5  # margin for ranking loss (0.5 is more stable than 1.0)
 
-# Use K=7 data for maximum diversity
 TRAIN_DATA = "train_k7.json"
 EVAL_DATA = "eval_k7.json"
 
@@ -91,7 +87,6 @@ class RoBERTaRanker(nn.Module):
         self.encoder = AutoModel.from_pretrained(model_name)
         hidden_size = self.encoder.config.hidden_size
 
-        # Score head: hidden -> 1
         self.score_head = nn.Sequential(
             nn.Dropout(0.1),
             nn.Linear(hidden_size, hidden_size // 2),
@@ -101,17 +96,14 @@ class RoBERTaRanker(nn.Module):
         )
 
     def forward(self, input_ids, attention_mask):
-        # Get encoder outputs
         outputs = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
-        hidden_states = outputs.last_hidden_state  # (batch, seq_len, hidden)
+        hidden_states = outputs.last_hidden_state
 
-        # Mean pooling (excluding padding)
         mask_expanded = attention_mask.unsqueeze(-1).float()
         sum_hidden = (hidden_states * mask_expanded).sum(dim=1)
         sum_mask = mask_expanded.sum(dim=1).clamp(min=1e-9)
-        pooled = sum_hidden / sum_mask  # (batch, hidden)
+        pooled = sum_hidden / sum_mask
 
-        # Score
         score = self.score_head(pooled).squeeze(-1)  # (batch,)
         return score
 
@@ -161,7 +153,7 @@ class PairwiseRankingDataset(Dataset):
 
 
 class SingleSolutionDataset(Dataset):
-    """Dataset for evaluation - single solutions with labels."""
+
     def __init__(self, examples, tokenizer, max_length):
         self.examples = examples
         self.tokenizer = tokenizer
@@ -191,27 +183,16 @@ class SingleSolutionDataset(Dataset):
 # Data Loading
 # ============================================================================
 def load_data_with_split(filepath, val_ratio=0.1):
-    """
-    Load data and split by QUESTIONS (not pairs) to avoid leakage.
 
-    Returns:
-        train_pairs: list of (pos_text, neg_text) for training
-        val_items: list of question items for validation (SingleSolution format)
-
-    This ensures validation questions are completely held out.
-    """
     with open(filepath, 'r') as f:
         data = json.load(f)
 
-    # Shuffle questions first
     random.shuffle(data)
 
-    # Split by questions
     val_size = int(len(data) * val_ratio)
     val_questions = data[:val_size]
     train_questions = data[val_size:]
 
-    # Create training pairs from train_questions only
     question_pairs = []
     for item in train_questions:
         question = item["question"]
@@ -228,7 +209,6 @@ def load_data_with_split(filepath, val_ratio=0.1):
             else:
                 wrong_solutions.append(text)
 
-        # Create all (correct, wrong) pairs for this question
         q_pairs = []
         for correct_text in correct_solutions:
             for wrong_text in wrong_solutions:
@@ -238,12 +218,10 @@ def load_data_with_split(filepath, val_ratio=0.1):
             random.shuffle(q_pairs)
             question_pairs.append(q_pairs)
 
-    # Shuffle order of questions, flatten, shuffle again
     random.shuffle(question_pairs)
     train_pairs = [p for q_pairs in question_pairs for p in q_pairs]
     random.shuffle(train_pairs)
 
-    # Create validation examples (single solutions with labels)
     val_examples = []
     for item in val_questions:
         question = item["question"]
@@ -261,7 +239,7 @@ def load_data_with_split(filepath, val_ratio=0.1):
 
 
 def load_single_examples(filepath):
-    """Load data as single examples for evaluation."""
+
     with open(filepath, 'r') as f:
         data = json.load(f)
 
@@ -285,13 +263,9 @@ def load_single_examples(filepath):
 # Evaluation
 # ============================================================================
 def compute_pairwise_accuracy(model, dataloader, device):
-    """
-    Compute pairwise accuracy: for each question, check if correct solutions
-    are scored higher than incorrect solutions.
-    """
+
     model.eval()
 
-    # Collect all scores grouped by question
     from collections import defaultdict
     question_scores = defaultdict(lambda: {"pos": [], "neg": []})
 
@@ -311,7 +285,6 @@ def compute_pairwise_accuracy(model, dataloader, device):
                 else:
                     question_scores[q_idx]["neg"].append(score)
 
-    # Compute pairwise accuracy
     correct_pairs = 0
     total_pairs = 0
 
@@ -333,10 +306,7 @@ def compute_pairwise_accuracy(model, dataloader, device):
 
 
 def compute_top1_accuracy(model, dataloader, device):
-    """
-    Compute top-1 accuracy: for each question, check if the highest-scored
-    solution is correct.
-    """
+
     model.eval()
 
     from collections import defaultdict
@@ -362,7 +332,6 @@ def compute_top1_accuracy(model, dataloader, device):
     for q_idx, solutions in question_solutions.items():
         if not solutions:
             continue
-        # Find solution with highest score
         _, best_label = max(solutions, key=lambda x: x[0])
         total += 1
         if best_label == 1:
@@ -375,34 +344,28 @@ def compute_top1_accuracy(model, dataloader, device):
 # Training
 # ============================================================================
 def train_epoch(model, dataloader, optimizer, scheduler, device, margin, scaler):
-    """Train for one epoch with Margin Ranking Loss and mixed precision."""
+    
     model.train()
     total_loss = 0
     num_batches = 0
 
-    # Margin Ranking Loss: wants pos_score > neg_score by at least margin
-    # y=1 means first input should be ranked higher
     ranking_loss = nn.MarginRankingLoss(margin=margin)
 
     progress_bar = tqdm(dataloader, desc="Training")
     for batch in progress_bar:
-        # Get positive and negative samples
         pos_input_ids = batch['pos_input_ids'].to(device)
         pos_attention_mask = batch['pos_attention_mask'].to(device)
         neg_input_ids = batch['neg_input_ids'].to(device)
         neg_attention_mask = batch['neg_attention_mask'].to(device)
 
-        # Forward pass with mixed precision
         with autocast('cuda'):
             pos_scores = model(pos_input_ids, pos_attention_mask)
             neg_scores = model(neg_input_ids, neg_attention_mask)
 
-            # Compute loss: we want pos_scores > neg_scores
             target = torch.ones(pos_scores.size(0), device=device)
             loss = ranking_loss(pos_scores, neg_scores, target)
             loss = loss / GRADIENT_ACCUMULATION
 
-        # Backward pass with scaler
         scaler.scale(loss).backward()
 
         total_loss += loss.item() * GRADIENT_ACCUMULATION
@@ -429,7 +392,6 @@ def main():
     log("DeBERTa Ranker Training (Pairwise Margin Ranking)")
     log("=" * 60)
 
-    # Check GPU
     log(f"PyTorch version: {torch.__version__}")
     log(f"CUDA available: {torch.cuda.is_available()}")
     if torch.cuda.is_available():
@@ -453,8 +415,6 @@ def main():
     log(f"Training data: {train_path}")
     log(f"Test data (final eval only): {test_path}")
 
-    # Split train_k7 into train + validation BY QUESTIONS (not pairs)
-    # This avoids data leakage - validation questions are completely held out
     train_pairs, val_examples, n_train_q, n_val_q = load_data_with_split(
         train_path, val_ratio=TRAIN_VAL_SPLIT
     )
@@ -465,7 +425,6 @@ def main():
     if len(train_pairs) > 50000:
         log(f"  NOTE: Large dataset - training may take a while")
 
-    # Load test data (eval_k7.json) - ONLY used for final evaluation
     test_examples = load_single_examples(test_path)
     log(f"Test examples (held out): {len(test_examples)}")
 
@@ -480,7 +439,6 @@ def main():
     model = RoBERTaRanker(BASE_MODEL)
     model = model.to(device)
 
-    # Count parameters
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     log(f"Total params: {total_params:,}")
@@ -553,7 +511,6 @@ def main():
     log(f"Mixed Precision: FP16 enabled")
     log("=" * 60 + "\n")
 
-    # Create gradient scaler for mixed precision training
     scaler = GradScaler('cuda')
 
     best_pairwise_acc = 0
@@ -562,18 +519,15 @@ def main():
     for epoch in range(NUM_EPOCHS):
         log(f"\n--- Epoch {epoch + 1}/{NUM_EPOCHS} ---")
 
-        # Train
         train_loss = train_epoch(model, train_loader, optimizer, scheduler, device, MARGIN, scaler)
         log(f"Training loss: {train_loss:.4f}")
 
-        # Evaluate on VALIDATION set (not test!)
         val_pairwise_acc, num_pairs = compute_pairwise_accuracy(model, val_loader, device)
         log(f"Val pairwise accuracy: {val_pairwise_acc:.4f} ({num_pairs} pairs)")
 
         val_top1_acc, num_questions = compute_top1_accuracy(model, val_loader, device)
         log(f"Val top-1 accuracy: {val_top1_acc:.4f} ({num_questions} questions)")
 
-        # Save checkpoint for this epoch
         os.makedirs(OUTPUT_DIR, exist_ok=True)
         checkpoint_path = os.path.join(OUTPUT_DIR, f"checkpoint_epoch{epoch + 1}.pt")
         torch.save({
@@ -587,7 +541,6 @@ def main():
         }, checkpoint_path)
         log(f"  Checkpoint saved: {checkpoint_path}")
 
-        # Save best model based on validation performance
         if val_pairwise_acc > best_pairwise_acc:
             best_pairwise_acc = val_pairwise_acc
             best_epoch = epoch + 1
@@ -603,7 +556,6 @@ def main():
     log("TRAINING COMPLETE!")
     log("=" * 60)
 
-    # Load best model
     model.load_state_dict(torch.load(os.path.join(OUTPUT_DIR, "best_model.pt")))
 
     log("\nFinal evaluation on held-out TEST set (eval_k7.json):")
@@ -618,7 +570,6 @@ def main():
     # ========================================================================
     log("\nSaving final model...")
 
-    # Save full model for easy loading
     torch.save({
         'model_state_dict': model.state_dict(),
         'config': {
@@ -627,7 +578,6 @@ def main():
         }
     }, os.path.join(OUTPUT_DIR, "ranker_model.pt"))
 
-    # Save training info
     training_info = {
         "base_model": BASE_MODEL,
         "model_type": "RoBERTa Ranker (Pairwise Margin)",

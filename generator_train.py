@@ -30,12 +30,10 @@ MODEL_NAME = "microsoft/phi-2"
 OUTPUT_DIR = "./generator_ovm"
 CHECKPOINT_DIR = "./generator_checkpoints"
 
-# LoRA config
 LORA_R = 16
 LORA_ALPHA = 16
 LORA_DROPOUT = 0.1
 
-# Training config
 NUM_EPOCHS = 2
 BATCH_SIZE = 1
 GRADIENT_ACCUMULATION = 32  # Effective batch size = 32
@@ -55,42 +53,30 @@ if torch.cuda.is_available():
 # Data Formatting
 # ============================================================================
 def format_gsm8k_example(example):
-    """
-    Format GSM8K example into prompt-response pair.
-    - Removes <<expression=result>> annotations
-    - Extracts final answer after ####
-    - Converts to 'Final answer:' format
-    """
+
     question = example["question"].strip()
     answer = example["answer"].strip()
 
-    # Validate: must contain ####
     if "####" not in answer:
         return {"prompt": None, "response": None}
 
-    # Extract ground truth answer (after ####)
     ground_truth_raw = answer.split("####")[-1].strip()
 
-    # Extract numeric part
     m = re.search(r"-?\d+(\.\d+)?", ground_truth_raw)
     if not m:
         return {"prompt": None, "response": None}
     ground_truth = m.group(0)
 
-    # Extract reasoning steps (before ####)
     reasoning = answer.split("####")[0].strip()
 
-    # Remove <<expression=result>> annotations
     reasoning = re.sub(r'<<[^>]+>>', '', reasoning)
     reasoning = reasoning.strip()
 
-    # Build prompt
     prompt = (
         f"Question: {question}\n\n"
         f"Let's solve this step by step.\n"
     )
 
-    # Build response
     response = (
         f"{reasoning}\n\n"
         f"Final answer: {ground_truth}"
@@ -117,7 +103,6 @@ def main():
     print("Generator Training (Phi-2 + QLoRA)")
     print("=" * 60)
 
-    # Check GPU
     if torch.cuda.is_available():
         print(f"GPU: {torch.cuda.get_device_name(0)}")
         print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
@@ -130,14 +115,12 @@ def main():
     print("\nLoading GSM8K dataset...")
     dataset = load_dataset("gsm8k", "main")
 
-    # Split train into train/val (90/10)
     train_val = dataset["train"].train_test_split(test_size=0.1, seed=SEED)
     train_set = train_val["train"]
     val_set = train_val["test"]
 
     print(f"Train: {len(train_set)}, Val: {len(val_set)}, Test: {len(dataset['test'])}")
 
-    # Format data
     print("\nFormatting training set...")
     train_formatted = train_set.map(format_gsm8k_example)
     train_formatted = train_formatted.filter(validate_example)
@@ -171,10 +154,8 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
     tokenizer.pad_token = tokenizer.eos_token
 
-    # Prepare for training
     model = prepare_model_for_kbit_training(model)
 
-    # Apply LoRA
     lora_config = LoraConfig(
         r=LORA_R,
         lora_alpha=LORA_ALPHA,
@@ -191,7 +172,7 @@ def main():
     # 3. Tokenize data
     # ========================================================================
     def format_and_tokenize(batch):
-        """Tokenize and mask prompt tokens so loss is only on response."""
+
         inputs = []
         attn = []
         labels = []
@@ -201,7 +182,6 @@ def main():
             tok_full = tokenizer(full, truncation=True, max_length=MAX_LENGTH, padding=False)
             tok_prompt = tokenizer(p, truncation=True, max_length=MAX_LENGTH, padding=False)
 
-            # Mask prompt tokens with -100
             lab = tok_full["input_ids"][:]
             prompt_len = len(tok_prompt["input_ids"])
             lab[:prompt_len] = [-100] * prompt_len

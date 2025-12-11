@@ -2,11 +2,6 @@
 """
 Evaluate G+V methods on classified groups
 =========================================
-
-读取分组文件 (group_high.json, group_medium.json, group_low.json)
-运行评估方法并输出结果
-
-评估方法:
 (i)   Generator-only Majority Vote (incremental batches)
 (ii)  G+V Top-Score Selection
 (iii) G+V Weighted Majority Vote
@@ -24,7 +19,7 @@ import numpy as np
 # ============================================================================
 # Configuration
 # ============================================================================
-GROUP_DIR = "./"  # 分组文件目录
+GROUP_DIR = "./"
 GROUP_FILES = {
     "high": "group_high.json",
     "medium": "group_medium.json",
@@ -197,7 +192,6 @@ def main():
     log(f"Verifier: {VERIFIER_PATH}")
     log(f"Classifier threshold: {CLASSIFIER_THRESHOLD}")
 
-    # Load metadata
     metadata_path = f"{GROUP_DIR}{METADATA_FILE}"
     if os.path.exists(metadata_path):
         with open(metadata_path, "r") as f:
@@ -208,7 +202,6 @@ def main():
         metadata = {}
         log("\nWarning: No metadata file found")
 
-    # Load all groups
     log("\nLoading group files...")
     all_data = []
     groups = {}
@@ -228,11 +221,9 @@ def main():
     total = len(all_data)
     log(f"Total: {total} questions")
 
-    # Load verifier
     verifier = Verifier()
     verifier.load()
 
-    # Score all solutions (once)
     log("\n" + "=" * 70)
     log("Scoring all solutions with verifier...")
     log("=" * 70)
@@ -243,7 +234,6 @@ def main():
         for sol, score in zip(solutions, scores):
             sol["verifier_score"] = score
 
-    # Run evaluation methods
     log("\nRunning evaluation methods...")
     results = {
         "high": {"mv": [], "top_score": [], "weighted_mv": []},
@@ -256,7 +246,6 @@ def main():
             ground_truth = item["ground_truth"]
             solutions = item["solutions"]
 
-            # Method (i): Majority Vote
             pred_mv, correct_mv, batches_mv = method_majority_vote_incremental(solutions, ground_truth)
             results[group_name]["mv"].append({
                 "index": item["index"],
@@ -265,7 +254,6 @@ def main():
                 "batches_used": batches_mv
             })
 
-            # Method (ii): G+V Top Score
             pred_ts, correct_ts, batches_ts = method_gv_top_score(solutions, ground_truth)
             results[group_name]["top_score"].append({
                 "index": item["index"],
@@ -274,7 +262,6 @@ def main():
                 "batches_used": batches_ts
             })
 
-            # Method (iii): G+V Weighted MV
             pred_wmv, correct_wmv, batches_wmv = method_gv_weighted_mv(solutions, ground_truth)
             results[group_name]["weighted_mv"].append({
                 "index": item["index"],
@@ -283,12 +270,10 @@ def main():
                 "batches_used": batches_wmv
             })
 
-    # Compute and print metrics
     log("\n" + "=" * 70)
     log("RESULTS")
     log("=" * 70)
 
-    # Overall metrics
     all_results = {"mv": [], "top_score": [], "weighted_mv": []}
     for group_name in ["high", "medium", "low"]:
         for method in ["mv", "top_score", "weighted_mv"]:
@@ -300,7 +285,6 @@ def main():
         "weighted_mv": "G+V Weighted MV"
     }
 
-    # Header
     log(f"\n{'Method':<25} | {'Overall':>10} | {'High':>10} | {'Medium':>10} | {'Low':>10}")
     log("-" * 75)
 
@@ -318,21 +302,18 @@ def main():
 
         log(f"{method_name:<25} | {overall_acc:>9.2f}% | {accs[0]:>9.2f}% | {accs[1]:>9.2f}% | {accs[2]:>9.2f}%")
 
-    # Pass@k
     log("\n" + "-" * 75)
     log("Oracle Upper Bounds (Pass@k):")
     for k in [5, 15]:
         overall_pass = sum(1 for item in all_data if any(s["is_correct"] for s in item["solutions"][:k]))
         log(f"  Pass@{k}: {100*overall_pass/total:.2f}%")
 
-    # Average batches used
     log("\n" + "-" * 75)
     log("Average Batches Used:")
     for method_key, method_name in method_names.items():
         avg_batches = np.mean([r["batches_used"] for r in all_results[method_key]])
         log(f"  {method_name}: {avg_batches:.2f}")
 
-    # Detailed group analysis
     log("\n" + "=" * 70)
     log("Detailed Group Analysis")
     log("=" * 70)
@@ -344,19 +325,16 @@ def main():
 
         log(f"\n[{group_name.capitalize()} Consensus Group] - {len(group_items)} questions")
 
-        # Pass@k
         for k in [5, 15]:
             pass_k = sum(1 for item in group_items if any(s["is_correct"] for s in item["solutions"][:k]))
             log(f"  Pass@{k}: {100*pass_k/len(group_items):.2f}%")
 
-        # Method comparison
         for method_key, method_name in method_names.items():
             group_results = results[group_name][method_key]
             acc = 100 * sum(1 for r in group_results if r["is_correct"]) / len(group_results)
             avg_batches = np.mean([r["batches_used"] for r in group_results])
             log(f"  {method_name}: {acc:.2f}% (avg {avg_batches:.2f} batches)")
 
-    # Save results
     log(f"\nSaving results to {OUTPUT_PATH}...")
     output_data = {
         "config": {
